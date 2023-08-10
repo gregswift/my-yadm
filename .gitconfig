@@ -1,0 +1,116 @@
+[gpg]
+  format = ssh
+
+[gpg "ssh"]
+  program = "/Applications/1Password.app/Contents/MacOS/op-ssh-sign"
+
+[commit]
+  gpgsign = true
+#  template = ~/.gitcommittemplate
+#  verbose = true
+
+[url "ssh://git@github.com/"]
+  insteadOf = https://github.com/
+
+[include]
+  path = ~/.gitconfig.work
+
+[includeIf "gitdir:~/Development/me/"]
+  path = ~/Development/me/.gitconfig
+
+[core]
+  pager = delta
+  preloadindex = true
+  excludesfile = ~/.gitignore.default
+  trustctime = false
+  commitGraph = true
+
+[alias]
+  lg = log --pretty=format:'%C(yellow)%h%C(reset) %C(cyan)%cI%C(reset) %s %C(blue)%an%C(reset) %C(green)%d%C(reset)' --graph
+  praise = blame
+  review = log --summary --patch --stat=100 --dirstat --ignore-all-space --reverse --decorate --find-renames=33 --find-copies-harder --cc
+  supdate = submodule update --init --rebase
+  supgrade = submodule update --init --remote --rebase
+  up = pull --ff-only --all -p
+  who = blame
+
+[init]
+  defaultBranch = main
+
+[remote "origin"]
+  # This adds pull requests to fetched refs
+  fetch = +refs/pull/*/head:refs/remotes/origin/pull/*
+
+[include]
+  # This allows you to commit some .gitconfig setting inside a repo
+  # in the root directory of the repo. I believe it acts as relative
+  # to the .git/ directory of the repo, but need to verify
+  path = ../.gitconfig.shared
+
+[color]
+  ui = auto
+
+[log]
+  date = local
+
+[interactive]
+  diffFilter = delta --color-only
+
+[status]
+  color = true
+  submodulesummary = true
+
+#[commit]
+
+[branch]
+  autosetuprebase = always
+
+[rebase]
+  autoStash = true
+
+[pull]
+  rebase = true
+  recurseSubmodules = on-demand
+
+[fetch]
+  prune = true
+  pruneTags = true
+  output = full
+
+[merge]
+  tool = code
+
+[mergetool "code"]
+  cmd = code --wait --merge $REMOTE $LOCAL $BASE $MERGED
+
+[diff]
+  colorMoved = default
+
+[mergetool "vscode"]
+  cmd = code --wait --merge $REMOTE $LOCAL $BASE $MERGED
+
+[delta]
+  navigate = true
+  side-by-side = true
+  line-numbers = true
+  features = side-by-side line-numbers decorations
+  syntax-theme = Dracula # Darkmode GitHub-esque theme
+#  plus-style = syntax "#003800"
+#  minus-style = syntax "#3f0001"
+   hyperlinks = true
+   hyperlinks-file-link-format = "vscode://file/{path}:{line}"
+
+[delta "decorations"]
+  commit-decoration-style = bold yellow box ul
+  file-style = bold yellow ul
+  file-decoration-style = none
+  hunk-header-decoration-style = cyan box ul
+
+[delta "line-numbers"]
+  line-numbers-left-style = cyan
+  line-numbers-right-style = cyan
+  line-numbers-minus-style = 124
+  line-numbers-plus-style = 28
+
+[push]
+  autoSetupRemote = true
