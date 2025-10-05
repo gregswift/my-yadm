@@ -1,45 +1,11 @@
-[gpg]
-  format = ssh
-
-[gpg "ssh"]
-  program = "/Applications/1Password.app/Contents/MacOS/op-ssh-sign"
-
-[commit]
-  gpgsign = true
-#  template = ~/.gitcommittemplate
-#  verbose = true
-
 [url "ssh://git@github.com/"]
   insteadOf = https://github.com/
 
 [include]
+  path = ~/.gitconfig.personal
+
+[includeIf "gitdir:~/Development/work"]
   path = ~/.gitconfig.work
-
-[includeIf "gitdir:~/Development/me/"]
-  path = ~/Development/me/.gitconfig
-
-[core]
-  pager = delta
-  preloadindex = true
-  excludesfile = ~/.gitignore.default
-  trustctime = false
-  commitGraph = true
-
-[alias]
-  lg = log --pretty=format:'%C(yellow)%h%C(reset) %C(cyan)%cI%C(reset) %s %C(blue)%an%C(reset) %C(green)%d%C(reset)' --graph
-  praise = blame
-  review = log --summary --patch --stat=100 --dirstat --ignore-all-space --reverse --decorate --find-renames=33 --find-copies-harder --cc
-  supdate = submodule update --init --rebase
-  supgrade = submodule update --init --remote --rebase
-  up = pull --ff-only --all -p
-  who = blame
-
-[init]
-  defaultBranch = main
-
-[remote "origin"]
-  # This adds pull requests to fetched refs
-  fetch = +refs/pull/*/head:refs/remotes/origin/pull/*
 
 [include]
   # This allows you to commit some .gitconfig setting inside a repo
@@ -47,35 +13,86 @@
   # to the .git/ directory of the repo, but need to verify
   path = ../.gitconfig.shared
 
-[color]
-  ui = auto
-
-[log]
-  date = local
-
-[interactive]
-  diffFilter = delta --color-only
-
-[status]
-  color = true
-  submodulesummary = true
-
-#[commit]
+[alias]
+  lg = log --pretty=format:'%C(yellow)%h%C(reset) %C(cyan)%cI%C(reset) %s %C(blue)%an%C(reset) %C(green)%d%C(reset)' --graph
+  commend = commit --amend --no-edit
+  please = push --force-with-lease
+  praise = blame
+  review = log --summary --patch --stat=100 --dirstat --ignore-all-space --reverse --decorate --find-renames=33 --find-copies-harder --cc
+  supdate = submodule update --init --rebase
+  supgrade = submodule update --init --remote --rebase
+  up = pull --ff-only --all -p
+  who = blame
 
 [branch]
   autosetuprebase = always
 
-[rebase]
-  autoStash = true
+[color]
+  ui = auto
 
-[pull]
-  rebase = true
-  recurseSubmodules = on-demand
+[commit]
+  gpgsign = true
+#  template = ~/.gitcommittemplate
+#  verbose = true
+
+[core]
+  commitGraph = true
+  excludesfile = ~/.gitignore.default
+  pager = delta
+  preloadindex = true
+  trustctime = false
+
+[delta]
+  features = side-by-side line-numbers decorations
+  hyperlinks = true
+  hyperlinks-file-link-format = "vscode://file/{path}:{line}"
+  line-numbers = true
+  #minus-style = syntax "#3f0001"
+  navigate = true
+  #plus-style = syntax "#003800"
+  side-by-side = true
+  syntax-theme = Dracula # Darkmode GitHub-esque theme
+
+[delta "decorations"]
+  commit-decoration-style = bold yellow box ul
+  file-decoration-style = none
+  file-style = bold yellow ul
+  hunk-header-decoration-style = cyan box ul
+
+[delta "line-numbers"]
+  line-numbers-left-style = cyan
+  line-numbers-minus-style = 124
+  line-numbers-plus-style = 28
+  line-numbers-right-style = cyan
+
+[diff]
+  colorMoved = default
 
 [fetch]
   prune = true
   pruneTags = true
   output = full
+
+[gpg]
+  format = ssh
+
+[gpg "ssh"]
+  #MacOS
+  #program = "/Applications/1Password.app/Contents/MacOS/op-ssh-sign"
+  #linux
+  program = "/opt/1Password/op-ssh-sign"
+
+[help]
+  autocorrect = prompt
+
+[init]
+  defaultBranch = main
+
+[interactive]
+  diffFilter = delta --color-only
+
+[log]
+  date = local
 
 [merge]
   tool = code
@@ -83,34 +100,23 @@
 [mergetool "code"]
   cmd = code --wait --merge $REMOTE $LOCAL $BASE $MERGED
 
-[diff]
-  colorMoved = default
-
 [mergetool "vscode"]
   cmd = code --wait --merge $REMOTE $LOCAL $BASE $MERGED
 
-[delta]
-  navigate = true
-  side-by-side = true
-  line-numbers = true
-  features = side-by-side line-numbers decorations
-  syntax-theme = Dracula # Darkmode GitHub-esque theme
-#  plus-style = syntax "#003800"
-#  minus-style = syntax "#3f0001"
-   hyperlinks = true
-   hyperlinks-file-link-format = "vscode://file/{path}:{line}"
-
-[delta "decorations"]
-  commit-decoration-style = bold yellow box ul
-  file-style = bold yellow ul
-  file-decoration-style = none
-  hunk-header-decoration-style = cyan box ul
-
-[delta "line-numbers"]
-  line-numbers-left-style = cyan
-  line-numbers-right-style = cyan
-  line-numbers-minus-style = 124
-  line-numbers-plus-style = 28
+[pull]
+  rebase = true
+  recurseSubmodules = on-demand
 
 [push]
   autoSetupRemote = true
+
+[rebase]
+  autoStash = true
+
+[remote "origin"]
+  # This adds pull requests to fetched refs
+  fetch = +refs/pull/*/head:refs/remotes/origin/pull/*
+
+[status]
+  color = true
+  submodulesummary = true
