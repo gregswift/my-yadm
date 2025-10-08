@@ -72,8 +72,8 @@ ZSH_THEME="robbyrussell"
 # Add wisely, as too many plugins slow down shell startup.
 plugins=(terraform)
 
+export ZSH_CUSTOM=$(realpath ~/.oh-my-zsh-custom)
 source $ZSH/oh-my-zsh.sh
-source ~/.oh-my-zsh-custom/*.zsh
 
 # User configuration
 
