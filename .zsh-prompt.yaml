@@ -74,6 +74,34 @@
         {
           "background": "p:error",
           "background_templates": [
+            "{{if contains \"dev\" .Name}}p:dev-bg{{end}}",
+            "{{if contains \"stag\" .Name}}p:staging-bg{{end}}",
+            "{{if contains \"prod\" .Name}}p:prod-bg{{end}}"
+          ],
+          "foreground": "p:text",
+          "leading_diamond": "\ue0c7",
+          "style": "diamond",
+          "template": "   ",
+          "trailing_diamond": "\ue0c6",
+          "type": "az"
+        },
+        {
+          "background": "p:error",
+          "background_templates": [
+            "{{if contains \"dev\" .Project}}p:dev-bg{{end}}",
+            "{{if contains \"stag\" .Project}}p:staging-bg{{end}}",
+            "{{if contains \"prod\" .Project}}p:prod-bg{{end}}"
+          ],
+          "foreground": "p:text",
+          "leading_diamond": "\ue0c7",
+          "style": "diamond",
+          "template": " 󱇶 ",
+          "trailing_diamond": "\ue0c6",
+          "type": "gcp"
+        },
+        {
+          "background": "p:error",
+          "background_templates": [
             "{{if contains \"dev\" .Context}}p:dev-bg{{end}}",
             "{{if contains \"stag\" .Context}}p:staging-bg{{end}}",
             "{{if contains \"prod\" .Context}}p:prod-bg{{end}}"
@@ -122,6 +150,42 @@
         "terraform"
       ],
       "type": "aws"
+    },
+    {
+      "background": "p:error",
+      "background_templates": [
+        "{{if contains \"dev\" .Name}}p:dev-bg{{end}}",
+        "{{if contains \"stag\" .Name}}p:staging-bg{{end}}",
+        "{{if contains \"prod\" .Name}}p:prod-bg{{end}}"
+      ],
+      "foreground": "p:tooltip-text",
+      "leading_diamond": "\ue0c7",
+      "style": "diamond",
+      "template": " {{.Name}} ",
+      "tips": [
+        "az",
+        "pulumi",
+        "terraform"
+      ],
+      "type": "az"
+    },
+    {
+      "background": "p:error",
+      "background_templates": [
+        "{{if contains \"dev\" .Project}}p:dev-bg{{end}}",
+        "{{if contains \"stag\" .Project}}p:staging-bg{{end}}",
+        "{{if contains \"prod\" .Project}}p:prod-bg{{end}}"
+      ],
+      "foreground": "p:tooltip-text",
+      "leading_diamond": "\ue0c7",
+      "style": "diamond",
+      "template": " {{.Project}} ",
+      "tips": [
+        "gcloud",
+        "pulumi",
+        "terraform"
+      ],
+      "type": "gcp"
     },
     {
       "background": "p:error",
