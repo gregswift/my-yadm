@@ -3,6 +3,13 @@
 - Always begin every response to me with my name, Greg.
 - Always report state of branches from a fresh origin pull, rather than stale memory. Telling me stale state wastes both of our time.
 
+# Worktree discipline (all repos using the bare + worktrees layout)
+
+- Every branch gets a persistent worktree, created with `git new-worktree <branch>` (the repo's sibling-worktree layout). Never `checkout -b` inside an existing worktree, and never build branches in throwaway `git worktree add` dirs that get deleted after pushing.
+- This applies to subagents too: when delegating implementation that creates or rewrites branches, instruct the agent to create/use the persistent per-branch worktrees, not temp ones. A branch that exists only as a local ref (no worktree) is invisible to `git refresh --stack`/`--all` and will be stranded by the next refresh.
+- After any out-of-band force-push to a branch (e.g. by an agent in another session), reset the branch's worktree to origin before running `git refresh` there, so a stale local can't be replayed over origin's newer content.
+- For stacked branches, prefer `git refresh --stack` for main-catchup; verify with `-n` first, and always build/test at the affected stack points before pushing rebases.
+
 # Working with Makefiles
 
 The Makefile is the interface to a repo. Every repo exposes the same verbs, so a command learned in one repo works in all of them.
