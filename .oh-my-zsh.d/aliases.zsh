@@ -11,8 +11,6 @@ done
 unset f
 
 alias git-rebase='printf "use: git refresh -i\n" >&2; false'
-alias git-new-worktree='printf "use: gwt <branch>  (git new-worktree does not cd)\n" >&2; false'
-alias git-checkout-worktree='printf "use: gwt <branch>  (it checks out an existing branch too)\n" >&2; false'
 
 # Other aliases
 KUBECOLOR=$(which kubecolor 2> /dev/null)
