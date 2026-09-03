@@ -14,11 +14,13 @@ import sys
 
 MAX_WORDS = 20
 MAX_PR_LINES = 20
+MAX_BODY_LINE = 100
 
 RULES = """Writing rules (~/.claude/CLAUDE.md):
 - One idea per sentence, 20 words or fewer.
 - No em dashes. Use a comma, a colon, or a second sentence.
-- Never wrap a commit body or PR body to a shell width. One line per paragraph.
+- Wrap commit bodies at 100 characters (commitlint body-max-line-length).
+- A PR body is not a commit: never wrapped, one line per paragraph.
 - A PR body is under 20 lines.
 - One rationale per tier. Code says what, comments say why, the commit carries
   rationale, docs hold paragraphs. Do not repeat one explanation across tiers.
@@ -182,6 +184,84 @@ def check_sentences(body):
     return findings[:5]
 
 
+COMMENT_LINE = re.compile(r"^\+\s*(?:#|//|--|;|\*)\s?(.*\S)\s*$")
+DUP_RUN = 4
+DUP_SKIP = frozenset(
+    "a an and are as at be been but by for from had has have in into is it its "
+    "not of on or so that the their then there these they this to was were "
+    "which while with would".split()
+)
+
+
+def _stem(word):
+    for suffix in ("ing", "ed", "es", "s"):
+        if len(word) > len(suffix) + 2 and word.endswith(suffix):
+            return word[: -len(suffix)]
+    return word
+
+
+def _tokens(text):
+    """Content words, stemmed. Paraphrase is still duplication."""
+    raw = re.findall(r"[a-z0-9_/.'-]+", text.replace("`", " ").lower())
+    return [_stem(w) for w in raw if w not in DUP_SKIP]
+
+
+def added_comments(cwd):
+    """Comment text the staged diff adds. Empty when git can't answer."""
+    import subprocess
+
+    try:
+        out = subprocess.run(
+            ["git", "diff", "--cached", "-U0"],
+            cwd=cwd or None,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        ).stdout
+    except Exception:
+        return []
+    found = []
+    for line in out.split("\n"):
+        if line.startswith("+++"):
+            continue
+        match = COMMENT_LINE.match(line)
+        if match:
+            found.append(match.group(1))
+    return found
+
+
+def check_tier_duplication(cwd, body):
+    """A comment repeating the commit body is one rationale in two tiers."""
+    body_words = _tokens(body)
+    if len(body_words) < DUP_RUN:
+        return []
+    grams = {
+        tuple(body_words[i : i + DUP_RUN])
+        for i in range(len(body_words) - DUP_RUN + 1)
+    }
+    # Joined: a comment wraps across source lines, so a run spans them.
+    comment_words = _tokens(" ".join(added_comments(cwd)))
+    for i in range(len(comment_words) - DUP_RUN + 1):
+        gram = tuple(comment_words[i : i + DUP_RUN])
+        if gram in grams:
+            return [
+                'a comment this commit adds repeats the commit body: "%s ...". '
+                "One rationale per tier: the commit carries why the change was "
+                "made, the comment carries only what the code cannot say."
+                % " ".join(gram)
+            ]
+    return []
+
+
+def check_body_line_length(body):
+    """commitlint's body-max-line-length. Commit bodies wrap at 100."""
+    for number, line in enumerate(body.split("\n"), start=1):
+        if len(line) > MAX_BODY_LINE:
+            return ["line %d is %d characters. Wrap commit bodies at %d, "
+                    "matching Conventional Commits." % (number, len(line), MAX_BODY_LINE)]
+    return []
+
+
 def check_length(body):
     count = len(body.strip().split("\n"))
     if count > MAX_PR_LINES:
@@ -202,9 +282,12 @@ def main():
     if not body.strip():
         return 0
 
-    findings = check_dashes(body) + check_wrapping(body) + check_sentences(body)
+    findings = check_dashes(body) + check_sentences(body)
     if kind == "pr":
-        findings += check_length(text)
+        # A pull request body is not a commit, so it is never wrapped.
+        findings += check_wrapping(body) + check_length(text)
+    else:
+        findings += check_body_line_length(body) + check_tier_duplication(cwd, body)
     if not findings:
         return 0
 

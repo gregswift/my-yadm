@@ -71,8 +71,10 @@ Principles:
 - Documentation (README, decision record, playbook) is where paragraph-length explanation lives: operational context, contracts, how-tos. When a comment wants to grow, it moves here and the comment becomes a one-line pointer.
 
 Supporting rules:
-- commits and PR bodies should never inject line returns to meet an arbitrary shell width limit.
+- Wrap commit bodies at 100 characters, matching Conventional Commits `body-max-line-length`. commitlint enforces this in CI.
+- PR bodies are not commits and are never wrapped. One line per paragraph.
 - Name the specific wrong action a reader takes without this comment. If you can't name it, there's no comment. Then check the other tiers: if the code already shows it or if the commit body or the doc already says it, there's still no comment.
+- A comment that contrasts before and after belongs in the commit. If it says "used to", "no longer", "now X instead of Y", or names what the change replaced, it is change rationale, not a why-comment.
 - Writing should always be plain style: one idea per sentence, ≤20 words, no figures of speech or idioms.
 - Identify the styling pattern inherent to the file you are editing. If no style exists, default to the recommended styling of the language. Change should not look different than the rest of the file. Prompt if inconclusive.
 - Answer the question a conditional comment raises.
