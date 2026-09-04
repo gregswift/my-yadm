@@ -3,9 +3,13 @@
 
 Reads a Claude Code hook payload on stdin. When the Bash command writes a
 commit message or a pull request body, the text is checked against the writing
-rules in ~/.claude/CLAUDE.md. Exit 2 blocks the command and returns the
-findings. Any internal error exits 0, because a broken linter must not stop
-work.
+rules in ~/.claude/skills/writing-standard/. Blocking findings exit 2 and
+return the findings to Claude. Warning findings exit 0 and print to stderr.
+Any internal error exits 0, because a broken linter must not stop work.
+
+Set WRITING_RULES_ALLOW to a comma-separated list of rule ids to skip them for
+one invocation. There is no permanent term allowlist: a term that is real gets
+defined in the repo, which clears the coined-term check on its own.
 """
 import json
 import os
@@ -13,10 +17,25 @@ import re
 import sys
 
 MAX_WORDS = 20
+BLOCK_WORDS = 30
 MAX_PR_LINES = 20
 MAX_BODY_LINE = 100
+MAX_COMMENT_SENTENCES = 3
+LOG_FILE = os.path.expanduser("~/.claude/hooks/writing-rules.log")
 
-RULES = """Writing rules (~/.claude/CLAUDE.md):
+# Rules not listed here block. A warning prints and exits 0, so a heuristic
+# check can be observed for a week before it is allowed to stop a commit.
+WARN_ONLY = frozenset({
+    "comment-rationale",
+    "comment-length",
+    "coined-term",
+    "verbed-noun",
+    "trailing-scope",
+    "ellipsis",
+    "sentence-long",
+})
+
+RULES = """Writing rules (~/.claude/skills/writing-standard/):
 - One idea per sentence, 20 words or fewer.
 - No em dashes. Use a comma, a colon, or a second sentence.
 - Wrap commit bodies at 100 characters (commitlint body-max-line-length).
@@ -24,7 +43,10 @@ RULES = """Writing rules (~/.claude/CLAUDE.md):
 - A PR body is under 20 lines.
 - One rationale per tier. Code says what, comments say why, the commit carries
   rationale, docs hold paragraphs. Do not repeat one explanation across tiers.
-- No idioms, no figures of speech, no meta-narration about your own writing."""
+- A comment is 3 sentences at most. Longer belongs in a doc with a pointer.
+- Never coin a name. A real name appears in the diff, not only in the prose.
+- No idioms, no figures of speech, no meta-narration about your own writing.
+- Never close on work that should have been settled before writing."""
 
 HEREDOC = re.compile(r"<<-?\s*(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\1\s*\n(.*?)\n\s*\2\b", re.S)
 FENCE = re.compile(r"^\s*```")
@@ -100,8 +122,13 @@ def flag_values(tokens, names):
     return found
 
 
+# yadm wraps git for dotfiles, so a commit it makes has to be read against
+# yadm's index rather than the one in the current directory.
+VCS = ("git", "yadm")
+
+
 def extract(command, cwd):
-    """Return (kind, body) where kind is 'commit', 'pr' or None."""
+    """Return (kind, body, program). kind is 'commit', 'pr' or None."""
     import shlex
 
     bodies = heredocs(command)
@@ -111,13 +138,14 @@ def extract(command, cwd):
     except ValueError:
         tokens = stripped.split()
 
-    is_commit = any(w[:1] == ["commit"] for w in positionals(tokens, "git"))
+    program = next((p for p in VCS
+                    if any(w[:1] == ["commit"] for w in positionals(tokens, p))), None)
     is_pr = any(w[:2] in PR_WRITES for w in positionals(tokens, "gh"))
-    if not is_commit and not is_pr:
-        return None, None
+    if not program and not is_pr:
+        return None, None, None
 
-    inline = flag_values(tokens, ["-m", "--message"] if is_commit else ["-b", "--body"])
-    files = flag_values(tokens, ["-F", "--file"] if is_commit else ["-F", "--body-file"])
+    inline = flag_values(tokens, ["-m", "--message"] if program else ["-b", "--body"])
+    files = flag_values(tokens, ["-F", "--file"] if program else ["-F", "--body-file"])
     for path in files:
         content = read_file(path, cwd)
         if content:
@@ -125,8 +153,8 @@ def extract(command, cwd):
 
     text = "\n\n".join(list(inline) + bodies).strip()
     if not text:
-        return None, None
-    return ("commit" if is_commit else "pr"), text
+        return None, None, None
+    return ("commit" if program else "pr"), text, program or "git"
 
 
 def body_of(kind, text):
@@ -151,10 +179,17 @@ def prose_lines(body):
     return out
 
 
+def plain(body):
+    """Body with fenced code, code spans and URLs removed."""
+    text = re.sub(r"(?s)```.*?```", " ", body)
+    return URL.sub("URL", CODE_SPAN.sub("CODE", text))
+
+
 def check_dashes(body):
     hits = [c for c in body if c in "—–"]
     if hits:
-        return ["%d em or en dash. Use a comma, a colon, or a second sentence." % len(hits)]
+        return [("em-dash", "%d em or en dash. Use a comma, a colon, or a "
+                 "second sentence." % len(hits))]
     return []
 
 
@@ -167,20 +202,22 @@ def check_wrapping(body):
             continue
         if text[-1:] in ".!?:" or not following:
             continue
-        return ["line %d is wrapped mid-sentence at %d characters. "
-                "Write one line per paragraph." % (number, len(text))]
+        return [("wrapping", "line %d is wrapped mid-sentence at %d characters. "
+                 "Write one line per paragraph." % (number, len(text)))]
     return []
 
 
 def check_sentences(body):
-    text = re.sub(r"(?s)```.*?```", " ", body)
-    text = URL.sub("URL", CODE_SPAN.sub("CODE", text))
     findings = []
-    for chunk in text.split("\n\n"):
+    for chunk in plain(body).split("\n\n"):
         for sentence in SENTENCE_SPLIT.split(chunk.strip()):
             words = sentence.split()
             if len(words) > MAX_WORDS:
-                findings.append("%d words: %s" % (len(words), " ".join(words[:9]) + " ..."))
+                # Greg's own prose averages 19-21 words, so 20 is the target and
+                # not a wall. Only a genuine run-on stops the commit.
+                rule = "sentence-length" if len(words) > BLOCK_WORDS else "sentence-long"
+                findings.append((rule,
+                                 "%d words: %s" % (len(words), " ".join(words[:9]) + " ...")))
     return findings[:5]
 
 
@@ -206,31 +243,48 @@ def _tokens(text):
     return [_stem(w) for w in raw if w not in DUP_SKIP]
 
 
-def added_comments(cwd):
-    """Comment text the staged diff adds. Empty when git can't answer."""
+def git(args, cwd, program="git"):
+    """Run a git command. Returns stdout, or None when git cannot answer."""
     import subprocess
 
     try:
-        out = subprocess.run(
-            ["git", "diff", "--cached", "-U0"],
-            cwd=cwd or None,
-            capture_output=True,
-            text=True,
-            timeout=10,
-        ).stdout
+        result = subprocess.run([program] + args, cwd=cwd or None,
+                                capture_output=True, text=True, timeout=10)
     except Exception:
-        return []
-    found = []
-    for line in out.split("\n"):
+        return None
+    return result.stdout if result.returncode in (0, 1) else None
+
+
+def staged_diff(cwd, program="git"):
+    return git(["diff", "--cached", "-U0"], cwd, program) or ""
+
+
+def comment_runs(diff):
+    """Comment text the staged diff adds, grouped into adjacent runs."""
+    runs = []
+    current = []
+    for line in diff.split("\n"):
         if line.startswith("+++"):
             continue
         match = COMMENT_LINE.match(line)
         if match:
-            found.append(match.group(1))
-    return found
+            current.append(match.group(1))
+            continue
+        if current:
+            runs.append(current)
+            current = []
+    if current:
+        runs.append(current)
+    return runs
 
 
-def check_tier_duplication(cwd, body):
+# A doc comment states a contract, so it is not a why-comment and the
+# three-sentence ceiling does not apply to it.
+DOC_MARKER = re.compile(r"@param|@return|@throws|@type|:param|:return|:rtype"
+                        r"|\bArgs:|\bReturns:|\bRaises:|\bAttributes:", re.I)
+
+
+def check_tier_duplication(diff, body):
     """A comment repeating the commit body is one rationale in two tiers."""
     body_words = _tokens(body)
     if len(body_words) < DUP_RUN:
@@ -239,34 +293,221 @@ def check_tier_duplication(cwd, body):
         tuple(body_words[i : i + DUP_RUN])
         for i in range(len(body_words) - DUP_RUN + 1)
     }
-    # Joined: a comment wraps across source lines, so a run spans them.
-    comment_words = _tokens(" ".join(added_comments(cwd)))
+    flat = " ".join(line for run in comment_runs(diff) for line in run)
+    comment_words = _tokens(flat)
     for i in range(len(comment_words) - DUP_RUN + 1):
         gram = tuple(comment_words[i : i + DUP_RUN])
         if gram in grams:
-            return [
-                'a comment this commit adds repeats the commit body: "%s ...". '
-                "One rationale per tier: the commit carries why the change was "
-                "made, the comment carries only what the code cannot say."
-                % " ".join(gram)
-            ]
+            return [("tier-duplication",
+                     'a comment this commit adds repeats the commit body: "%s ...". '
+                     "One rationale per tier: the commit carries why the change was "
+                     "made, the comment carries only what the code cannot say."
+                     % " ".join(gram))]
     return []
+
+
+RATIONALE = re.compile(
+    r"\bused to\b|\bno longer\b|\bpreviously\b|\bwas considered\b"
+    r"|\bnow .{1,30}\binstead\b|\bthis (?:change|commit|patch)\b"
+    r"|\bwe (?:switched|moved|changed|replaced)\b|\bused to be\b",
+    re.I,
+)
+
+
+def check_comment_rationale(diff):
+    """Before-and-after contrast in a comment is commit-body content."""
+    for run in comment_runs(diff):
+        text = " ".join(run)
+        if DOC_MARKER.search(text):
+            continue
+        match = RATIONALE.search(text)
+        if match:
+            return [("comment-rationale",
+                     'a comment this commit adds says "%s". A comment that contrasts '
+                     "before and after is change rationale. Move it to the commit body."
+                     % match.group(0))]
+    return []
+
+
+def check_comment_length(diff):
+    for run in comment_runs(diff):
+        text = " ".join(run).strip()
+        if DOC_MARKER.search(text) or len(text) < 120:
+            continue
+        count = len([s for s in SENTENCE_SPLIT.split(text) if s.strip()])
+        if count > MAX_COMMENT_SENTENCES:
+            return [("comment-length",
+                     'a comment this commit adds runs %d sentences: "%s ...". The ceiling '
+                     "is %d. Move it to a doc and leave a one-line pointer."
+                     % (count, text[:60], MAX_COMMENT_SENTENCES))]
+    return []
+
+
+BANNED = [
+    "i wanted to reach out", "just wanted to", "just checking in", "reaching out",
+    "circle back", "touch base", "sync up", "at the end of the day",
+    "great question", "hope this finds you well", "delve", "tapestry",
+    "in today's fast-paced", "best-in-class", "seamless", "unlock",
+    "leverage", "empower", "catch-all", "unbounded",
+]
+NOT_X_IT_Y = re.compile(r"\b(?:it'?s|this is|that'?s)\s+not\s+[^,.]{1,40},\s*"
+                        r"(?:it'?s|this is|that'?s)\b", re.I)
+
+
+def check_banned(body):
+    text = plain(body).lower()
+    hits = [phrase for phrase in BANNED if phrase in text]
+    findings = []
+    if hits:
+        findings.append(("banned-phrase",
+                         "banned phrase: %s. If the phrase is banned because the sentence "
+                         "does no work, delete the sentence rather than reword it."
+                         % ", ".join('"%s"' % h for h in hits[:4])))
+    if NOT_X_IT_Y.search(plain(body)):
+        findings.append(("banned-phrase",
+                         'an "It\'s not X, it\'s Y" construction. State the claim directly.'))
+    return findings
+
+
+def check_ellipsis(body):
+    if re.search(r"\.\.\.|…", plain(body)):
+        return [("ellipsis", "an ellipsis. It is Greg's keyboard habit when he writes, "
+                 "never one to generate.")]
+    return []
+
+
+VERBED = re.compile(
+    r"\b(?:that|which|to|will|can|should|would|may|must|and|or)\s+"
+    r"(names?|gates?|actions?|surfaces?|impacts?|leverages?|architects?)\b",
+    re.I,
+)
+
+
+def check_verbed_noun(body):
+    match = VERBED.search(plain(body))
+    if match:
+        return [("verbed-noun",
+                 'the noun "%s" is used as a verb ("%s"). Simplified Technical English '
+                 "fixes one part of speech per word. Point at the literal artifact instead."
+                 % (match.group(1), match.group(0)))]
+    return []
+
+
+HYPHENATED = re.compile(r"\b[a-z]{3,}(?:-[a-z]{2,}){1,2}\b")
+CAMEL = re.compile(r"\b[A-Z][a-z]{2,}[A-Z][A-Za-z]{2,}\b")
+COMMON_COMPOUND = frozenset("""
+follow-up followup out-of-scope well-known read-only read-write up-to-date
+end-to-end long-running short-lived left-over per-user per-repo per-branch
+non-zero non-empty pull-request first-party third-party built-in opt-in opt-out
+day-to-day one-off round-trip side-effect trade-off drop-in run-time
+re-run re-use set-up check-in hard-coded well-formed self-hosted multi-tenant
+GitHub GitLab PostgreSQL MySQL JavaScript TypeScript Kubernetes CloudFormation
+OpenTofu DataDog CloudFlare PagerDuty ClickHouse LinkedIn WireGuard MacOS
+""".split())
+
+
+def check_coined_term(cwd, body, diff, program="git"):
+    """A name being introduced appears in the diff. One only in prose is invented."""
+    text = plain(body)
+    skip = COMMON_COMPOUND
+    candidates = []
+    for term in HYPHENATED.findall(text) + CAMEL.findall(text):
+        if term.lower() not in skip and term not in candidates:
+            candidates.append(term)
+    lower_diff = diff.lower()
+    for term in candidates[:12]:
+        if term.lower() in lower_diff:
+            continue
+        found = git(["grep", "--cached", "-liF", term], cwd, program)
+        # None means git could not answer, so the term cannot be judged.
+        if found is None or found.strip():
+            continue
+        return [("coined-term",
+                 '"%s" appears in the prose but not in the staged diff or the repo. '
+                 "A name you are genuinely introducing shows up in the code you are "
+                 "committing. Either use plain description, or, if the term is real "
+                 "and will be reused, define it in the repo (CONTEXT.md, a glossary, "
+                 "or an ADR) so it stops being invented." % term)]
+    return []
+
+
+DEFERRAL = re.compile(
+    r"should (?:probably |also |eventually )*(?:address|consider|revisit|look at|fix|handle)"
+    r"|additional (?:things|items|work|changes|cleanup)"
+    r"|other (?:things|items|cleanup)"
+    r"|might want to|follow-?ups?\b|in a (?:future|later) (?:pr|commit)"
+    r"|left for later|further (?:work|investigation)",
+    re.I,
+)
+VAGUE = re.compile(r"\bprobably\b|\bsome\b|\ba few\b|\badditional\b|\bother\b"
+                   r"|\bmight\b|\bvarious\b|\betc\b", re.I)
+TICKET = re.compile(r"#\d+|[A-Z]{2,}-\d+")
+
+
+def check_trailing_scope(body):
+    """A vague deferral at the end is work that belonged in the discussion."""
+    lines = [line for line in plain(body).strip().split("\n") if line.strip()]
+    tail = "\n".join(lines[-4:])
+    if not DEFERRAL.search(tail):
+        return []
+    if TICKET.search(tail) or not VAGUE.search(tail):
+        return []
+    return [("trailing-scope",
+             "the closing lines defer work vaguely. A deferral names the specific thing "
+             "and either carries a ticket number or says why it was deferred. Resolve it, "
+             "track it, or cut it.")]
 
 
 def check_body_line_length(body):
     """commitlint's body-max-line-length. Commit bodies wrap at 100."""
     for number, line in enumerate(body.split("\n"), start=1):
         if len(line) > MAX_BODY_LINE:
-            return ["line %d is %d characters. Wrap commit bodies at %d, "
-                    "matching Conventional Commits." % (number, len(line), MAX_BODY_LINE)]
+            return [("body-line-length",
+                     "line %d is %d characters. Wrap commit bodies at %d, "
+                     "matching Conventional Commits." % (number, len(line), MAX_BODY_LINE))]
     return []
 
 
 def check_length(body):
     count = len(body.strip().split("\n"))
     if count > MAX_PR_LINES:
-        return ["PR body is %d lines. The limit is %d." % (count, MAX_PR_LINES)]
+        return [("pr-length", "PR body is %d lines. The limit is %d." % (count, MAX_PR_LINES))]
     return []
+
+
+def collect(kind, body, text, cwd, program="git"):
+    findings = (check_dashes(body) + check_sentences(body) + check_banned(body)
+                + check_ellipsis(body) + check_verbed_noun(body))
+    diff = staged_diff(cwd, program)
+    findings += check_coined_term(cwd, body, diff, program)
+    if kind == "pr":
+        # A pull request body is not a commit, so it is never wrapped.
+        findings += check_wrapping(body) + check_length(text) + check_trailing_scope(body)
+    else:
+        findings += (check_body_line_length(body) + check_tier_duplication(diff, body)
+                     + check_comment_rationale(diff) + check_comment_length(diff)
+                     + check_trailing_scope(body))
+    return findings
+
+
+def record(kind, cwd, findings, bypassed):
+    """Append one line per invocation. A silent log is worth more than a warning
+    nobody rereads, and a bypass has to leave a trace to be reviewable."""
+    import datetime
+
+    entry = {
+        "ts": datetime.datetime.now().isoformat(timespec="seconds"),
+        "kind": kind,
+        "cwd": cwd,
+        "blocked": sorted({r for r, _ in findings if r not in WARN_ONLY}),
+        "warned": sorted({r for r, _ in findings if r in WARN_ONLY}),
+        "bypassed": sorted(bypassed),
+    }
+    try:
+        with open(LOG_FILE, "a", encoding="utf-8") as handle:
+            handle.write(json.dumps(entry) + "\n")
+    except OSError:
+        pass
 
 
 def main():
@@ -274,7 +515,7 @@ def main():
     command = payload.get("tool_input", {}).get("command", "")
     cwd = payload.get("cwd") or os.getcwd()
 
-    kind, text = extract(command, cwd)
+    kind, text, program = extract(command, cwd)
     if not kind:
         return 0
 
@@ -282,19 +523,25 @@ def main():
     if not body.strip():
         return 0
 
-    findings = check_dashes(body) + check_sentences(body)
-    if kind == "pr":
-        # A pull request body is not a commit, so it is never wrapped.
-        findings += check_wrapping(body) + check_length(text)
-    else:
-        findings += check_body_line_length(body) + check_tier_duplication(cwd, body)
-    if not findings:
-        return 0
+    allowed = {r.strip() for r in os.environ.get("WRITING_RULES_ALLOW", "").split(",") if r.strip()}
+    all_findings = collect(kind, body, text, cwd, program)
+    findings = [f for f in all_findings if f[0] not in allowed]
+    record(kind, cwd, all_findings, {r for r, _ in all_findings if r in allowed})
+    blocking = [f for f in findings if f[0] not in WARN_ONLY]
+    warnings = [f for f in findings if f[0] in WARN_ONLY]
 
     label = "commit message" if kind == "commit" else "pull request body"
+    if warnings:
+        sys.stderr.write("Writing warnings on this %s (not blocking):\n" % label)
+        for rule, message in warnings:
+            sys.stderr.write("  - [%s] %s\n" % (rule, message))
+        sys.stderr.write("\n")
+    if not blocking:
+        return 0
+
     sys.stderr.write("Blocked: this %s breaks the writing rules.\n\n" % label)
-    for finding in findings:
-        sys.stderr.write("  - %s\n" % finding)
+    for rule, message in blocking:
+        sys.stderr.write("  - [%s] %s\n" % (rule, message))
     sys.stderr.write("\n%s\n\nRewrite the text and run the command again.\n" % RULES)
     return 2
 

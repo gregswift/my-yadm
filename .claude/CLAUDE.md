@@ -93,3 +93,7 @@ Supporting rules:
 3. When working anywhere else, the preference is to maintain a minimal but distinct set of commits that adequately communicate the change.
    - Do not lump things into the same commit just to have a single commit
    - Changes should be additive to the previous, refactoring should rarely if ever be done inside the same commit.
+4. The `writing-rules` hook is a gate, not a suggestion. Never route around it.
+   - `WRITING_RULES_ALLOW` is mine to set. Do not set it, and do not suggest it as the fix.
+   - Do not edit, unregister, rename or `chmod -x` the hook, and do not switch to a command form that evades it.
+   - If a rule is genuinely wrong for the artifact, rewrite the text. If rewriting cannot satisfy it, stop and tell me which rule and why.
