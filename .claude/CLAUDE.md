@@ -62,7 +62,9 @@ The Makefile is the interface to a repo. Every repo exposes the same verbs, so a
 - CI's `tmpfs` path tracks the same declared volume path as the dev mount.
 - A stateful volume belongs to the major version of the server that wrote it. `stop` drops volumes, so crossing a major recovers by recreating the stack.
 
-# Documenting when coding and proposing PRs
+# Coding, commiting, and submitting PRs
+
+## Documenting when coding and proposing PRs
 
 Principles:
 - Code says what. If the code can show it, nothing else should say it.
@@ -82,13 +84,13 @@ Supporting rules:
 - Always state full phrasing on first use of an acronym in a file or commit.
 - Re-run the tests on every commit in the diff before pushing, reading it as if someone else wrote it, with delete as the default verdict.
 
-# Committing code
+## Committing code
 
 1. 1Password is the key signing agent, and will prompt the user anytime a key usage event happens.
    - Do not try to bypass this
-   - I usually authorize it when it pops up, unless I have a reason for you to stop or I've walked away.
-   - Have the commit staged and ready for when I return, continue if you can with other activities, otherwise pause.
-2. When working in `xata` repos, the preference is to maintain 1 commit per branch/PR pair.
+   - If it times out the user probably stepped away, stage the change and prompt the user when they return.
+   - If the commit was just a point in time marker and you can continue with other activities, otherwise pause and wait.
+2. When working in `xataio` repos, the preference is to maintain 1 commit per branch/PR pair.
    - GitHub Stacks are available and facilitate when a change as additive commits that should be separate from other related changes.
 3. When working anywhere else, the preference is to maintain a minimal but distinct set of commits that adequately communicate the change.
    - Do not lump things into the same commit just to have a single commit
@@ -98,3 +100,4 @@ Supporting rules:
    - A skip comes from `~/.claude/hooks/writing-rules.override`, which I write by hand. Never create that file.
    - Do not edit, unregister, rename or `chmod -x` the hook, and do not switch to a command form that evades it.
    - If a rule is genuinely wrong for the artifact, rewrite the text. If rewriting cannot satisfy it, stop and tell me which rule and why.
+
