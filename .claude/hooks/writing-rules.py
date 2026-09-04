@@ -7,9 +7,11 @@ rules in ~/.claude/skills/writing-standard/. Blocking findings exit 2 and
 return the findings to Claude. Warning findings exit 0 and print to stderr.
 Any internal error exits 0, because a broken linter must not stop work.
 
-Set WRITING_RULES_ALLOW to a comma-separated list of rule ids to skip them for
-one invocation. There is no permanent term allowlist: a term that is real gets
-defined in the repo, which clears the coined-term check on its own.
+WRITING_RULES_ALLOW is not honored. Setting it blocks the command and is
+recorded, because an agent can set an environment variable and a gate that any
+caller can switch off is not a gate. A skip is taken from
+~/.claude/hooks/writing-rules.override, which Greg writes by hand and which is
+consumed on first use.
 """
 import json
 import os
@@ -22,6 +24,7 @@ MAX_PR_LINES = 20
 MAX_BODY_LINE = 100
 MAX_COMMENT_SENTENCES = 3
 LOG_FILE = os.path.expanduser("~/.claude/hooks/writing-rules.log")
+OVERRIDE_FILE = os.path.expanduser("~/.claude/hooks/writing-rules.override")
 
 # Rules not listed here block. A warning prints and exits 0, so a heuristic
 # check can be observed for a week before it is allowed to stop a commit.
@@ -146,12 +149,21 @@ def extract(command, cwd):
 
     inline = flag_values(tokens, ["-m", "--message"] if program else ["-b", "--body"])
     files = flag_values(tokens, ["-F", "--file"] if program else ["-F", "--body-file"])
-    for path in files:
+    named = [p for p in files if p and p != "-"]
+    read = 0
+    for path in named:
         content = read_file(path, cwd)
         if content:
             bodies.append(content)
+            read += 1
 
     text = "\n\n".join(list(inline) + bodies).strip()
+    # An unreadable message file is a hole, not an absence. A shell variable in
+    # the path reaches this hook unexpanded, and passing would skip every rule.
+    # A heredoc in the same command writes that file after this hook runs, so
+    # its text is already in hand and the path not existing yet is expected.
+    if named and not read and not text:
+        return "unreadable", named[0], program or "git"
     if not text:
         return None, None, None
     return ("commit" if program else "pr"), text, program or "git"
@@ -400,6 +412,7 @@ follow-up followup out-of-scope well-known read-only read-write up-to-date
 end-to-end long-running short-lived left-over per-user per-repo per-branch
 non-zero non-empty pull-request first-party third-party built-in opt-in opt-out
 day-to-day one-off round-trip side-effect trade-off drop-in run-time
+false-positive false-negative
 re-run re-use set-up check-in hard-coded well-formed self-hosted multi-tenant
 GitHub GitLab PostgreSQL MySQL JavaScript TypeScript Kubernetes CloudFormation
 OpenTofu DataDog CloudFlare PagerDuty ClickHouse LinkedIn WireGuard MacOS
@@ -490,7 +503,22 @@ def collect(kind, body, text, cwd, program="git"):
     return findings
 
 
-def record(kind, cwd, findings, bypassed):
+def take_override():
+    """Read the hand-written skip list and delete it, so one file is one use."""
+    try:
+        with open(OVERRIDE_FILE, encoding="utf-8") as handle:
+            rules = {line.strip() for line in handle
+                     if line.strip() and not line.startswith("#")}
+    except OSError:
+        return set()
+    try:
+        os.remove(OVERRIDE_FILE)
+    except OSError:
+        pass
+    return rules
+
+
+def record(kind, cwd, findings, bypassed, attempted=()):
     """Append one line per invocation. A silent log is worth more than a warning
     nobody rereads, and a bypass has to leave a trace to be reviewable."""
     import datetime
@@ -502,6 +530,7 @@ def record(kind, cwd, findings, bypassed):
         "blocked": sorted({r for r, _ in findings if r not in WARN_ONLY}),
         "warned": sorted({r for r, _ in findings if r in WARN_ONLY}),
         "bypassed": sorted(bypassed),
+        "attempted": sorted(attempted),
     }
     try:
         with open(LOG_FILE, "a", encoding="utf-8") as handle:
@@ -518,15 +547,33 @@ def main():
     kind, text, program = extract(command, cwd)
     if not kind:
         return 0
+    if kind == "unreadable":
+        record("unreadable", cwd, [("unreadable-message", text)], set())
+        sys.stderr.write(
+            "Blocked: the message file %r could not be read, so the text was not "
+            "checked.\n\nA path holding a shell variable arrives here unexpanded. "
+            "Pass an absolute path, or pass the message with -m.\n" % text)
+        return 2
 
     body = body_of(kind, text)
     if not body.strip():
         return 0
 
-    allowed = {r.strip() for r in os.environ.get("WRITING_RULES_ALLOW", "").split(",") if r.strip()}
+    attempted = {r.strip() for r in os.environ.get("WRITING_RULES_ALLOW", "").split(",") if r.strip()}
+    allowed = take_override()
     all_findings = collect(kind, body, text, cwd, program)
     findings = [f for f in all_findings if f[0] not in allowed]
-    record(kind, cwd, all_findings, {r for r, _ in all_findings if r in allowed})
+    record(kind, cwd, all_findings, {r for r, _ in all_findings if r in allowed}, attempted)
+
+    if attempted:
+        sys.stderr.write(
+            "Blocked: WRITING_RULES_ALLOW was set to %s on this command.\n\n"
+            "That variable is not honored and never skips a rule. It is recorded in "
+            "%s.\n\nStop. Tell Greg that a bypass was attempted, name the rule, and "
+            "say why the text could not satisfy it. Do not retry the command, with or "
+            "without the variable.\n" % (",".join(sorted(attempted)), LOG_FILE))
+        return 2
+
     blocking = [f for f in findings if f[0] not in WARN_ONLY]
     warnings = [f for f in findings if f[0] in WARN_ONLY]
 
