@@ -34,6 +34,7 @@ WARN_ONLY = frozenset({
     "coined-term",
     "verbed-noun",
     "trailing-scope",
+    "out-of-scope-pointer",
     "ellipsis",
     "sentence-long",
 })
@@ -537,6 +538,51 @@ def check_trailing_scope(body):
              "track it, or cut it.")]
 
 
+OOS_HEADER = re.compile(r"^\s*(?:#{1,4}\s*)?\**\s*out[- ]of[- ]scope\b", re.I)
+OOS_NEXT = re.compile(r"^\s*(?:#{1,4}\s|\*\*[A-Z])")
+OOS_POINTER = re.compile(
+    r"separate (?:issue|finding|pr|ticket)|file (?:a|an|it|them|these)"
+    r"|follow[- ]?up|another (?:pr|issue)|tracked (?:in|by)|will be (?:done|handled)"
+    r"|deferred to|left (?:to|for)", re.I)
+OOS_WORDS = 12
+
+
+def check_out_of_scope(body):
+    """Out of Scope kills a misreading of this artifact. It is not a parking bay.
+
+    Greg's own entries are a five word noun phrase and an empty list. An entry
+    that points at other work was deleted from a draft in full."""
+    lines = plain(body).split("\n")
+    start = next((i for i, line in enumerate(lines) if OOS_HEADER.match(line)), None)
+    if start is None:
+        return []
+    section = []
+    for line in lines[start + 1:]:
+        if OOS_NEXT.match(line):
+            break
+        section.append(line)
+
+    # A bare paragraph under the header carries no bullet, so it would escape a
+    # list walk entirely, and that is the shape of the entries Greg deletes.
+    items = trailing_items(section) or [" ".join(section).strip()]
+    for item in items:
+        text = re.sub(r"^\s*(?:[-*+]|\d+[.)])\s*", "", item).strip()
+        if not text:
+            continue
+        if TICKET.search(text) or OOS_POINTER.search(text):
+            return [("out-of-scope-pointer",
+                     'the Out of Scope list points at other work: "%s". That section names an '
+                     "expectation a reader would bring to this artifact, so they stop expecting "
+                     "it. Other work gets its own issue, not a pointer stapled here."
+                     % text[:70])]
+        if len(text.split()) > OOS_WORDS:
+            return [("out-of-scope-pointer",
+                     'an Out of Scope entry runs %d words: "%s". It is a short phrase naming '
+                     "what this artifact does not do, not a sentence explaining why."
+                     % (len(text.split()), text[:70]))]
+    return []
+
+
 def check_body_line_length(body):
     """commitlint's body-max-line-length. Commit bodies wrap at 100."""
     for number, line in enumerate(body.split("\n"), start=1):
@@ -561,7 +607,8 @@ def collect(kind, body, text, cwd, program="git"):
     findings += check_coined_term(cwd, body, diff, program)
     if kind == "pr":
         # A pull request body is not a commit, so it is never wrapped.
-        findings += check_wrapping(body) + check_length(text) + check_trailing_scope(body)
+        findings += (check_wrapping(body) + check_length(text)
+                     + check_trailing_scope(body) + check_out_of_scope(body))
     else:
         findings += (check_body_line_length(body) + check_tier_duplication(diff, body)
                      + check_comment_rationale(diff) + check_comment_length(diff)
