@@ -544,14 +544,14 @@ OOS_POINTER = re.compile(
     r"separate (?:issue|finding|pr|ticket)|file (?:a|an|it|them|these)"
     r"|follow[- ]?up|another (?:pr|issue)|tracked (?:in|by)|will be (?:done|handled)"
     r"|deferred to|left (?:to|for)", re.I)
-OOS_WORDS = 12
 
 
 def check_out_of_scope(body):
-    """Out of Scope kills a misreading of this artifact. It is not a parking bay.
+    """Out of Scope names what this artifact does not do, not where other work lives.
 
-    Greg's own entries are a five word noun phrase and an empty list. An entry
-    that points at other work was deleted from a draft in full."""
+    Only content is judged here. The short noun phrase shape is evidenced in
+    convention documents, which never reach this hook, so enforcing it on an
+    issue would apply one artifact class to another."""
     lines = plain(body).split("\n")
     start = next((i for i, line in enumerate(lines) if OOS_HEADER.match(line)), None)
     if start is None:
@@ -575,11 +575,6 @@ def check_out_of_scope(body):
                      "expectation a reader would bring to this artifact, so they stop expecting "
                      "it. Other work gets its own issue, not a pointer stapled here."
                      % text[:70])]
-        if len(text.split()) > OOS_WORDS:
-            return [("out-of-scope-pointer",
-                     'an Out of Scope entry runs %d words: "%s". It is a short phrase naming '
-                     "what this artifact does not do, not a sentence explaining why."
-                     % (len(text.split()), text[:70]))]
     return []
 
 
