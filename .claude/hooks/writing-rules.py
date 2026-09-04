@@ -51,7 +51,8 @@ RULES = """Writing rules (~/.claude/skills/writing-standard/):
 - No idioms, no figures of speech, no meta-narration about your own writing.
 - Never close on work that should have been settled before writing."""
 
-HEREDOC = re.compile(r"<<-?\s*(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\1\s*\n(.*?)\n\s*\2\b", re.S)
+HEREDOC = re.compile(r"(?:>\s*(\S+)\s*)?<<-?\s*(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\2\s*\n"
+                     r"(.*?)\n\s*\3\b", re.S)
 FENCE = re.compile(r"^\s*```")
 LIST_ITEM = re.compile(r"^\s*(?:[-*+>|#]|\d+[.)])\s")
 URL = re.compile(r"https?://\S+")
@@ -93,7 +94,8 @@ def positionals(tokens, program, limit=3):
 
 
 def heredocs(command):
-    return [m.group(3) for m in HEREDOC.finditer(command)]
+    """(redirect target, body) for each heredoc. Target is None when unredirected."""
+    return [(m.group(1), m.group(4)) for m in HEREDOC.finditer(command)]
 
 
 def read_file(path, cwd):
@@ -134,7 +136,7 @@ def extract(command, cwd):
     """Return (kind, body, program). kind is 'commit', 'pr' or None."""
     import shlex
 
-    bodies = heredocs(command)
+    docs = heredocs(command)
     stripped = HEREDOC.sub(" ", command)
     try:
         tokens = shlex.split(stripped, comments=False)
@@ -149,7 +151,19 @@ def extract(command, cwd):
 
     inline = flag_values(tokens, ["-m", "--message"] if program else ["-b", "--body"])
     files = flag_values(tokens, ["-F", "--file"] if program else ["-F", "--body-file"])
+
     named = [p for p in files if p and p != "-"]
+    # A command can carry heredocs that are not the message, such as a script it
+    # writes first. Checking those as prose reports sentences nobody wrote.
+    if named:
+        wanted = {os.path.basename(p) for p in named}
+        bodies = [b for target, b in docs
+                  if target and os.path.basename(target) in wanted]
+    elif inline:
+        bodies = []
+    else:
+        bodies = [b for _, b in docs]
+
     read = 0
     for path in named:
         content = read_file(path, cwd)
@@ -268,7 +282,14 @@ def git(args, cwd, program="git"):
 
 
 def staged_diff(cwd, program="git"):
-    return git(["diff", "--cached", "-U0"], cwd, program) or ""
+    """Staged changes, falling back to the working tree.
+
+    A command that stages and commits in one line reaches this hook before the
+    add runs, so the index is still empty and every diff check sees nothing."""
+    staged = git(["diff", "--cached", "-U0"], cwd, program) or ""
+    if staged.strip():
+        return staged
+    return git(["diff", "HEAD", "-U0"], cwd, program) or ""
 
 
 def comment_runs(diff):
