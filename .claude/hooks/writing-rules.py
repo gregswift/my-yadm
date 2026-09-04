@@ -468,7 +468,7 @@ def check_coined_term(cwd, body, diff, program="git"):
 DEFERRAL = re.compile(
     r"should (?:probably |also |eventually )*(?:address|consider|revisit|look at|fix|handle)"
     r"|additional (?:things|items|work|changes|cleanup)"
-    r"|other (?:things|items|cleanup)"
+    r"|(?<!among )other (?:things|items|cleanup)"
     r"|might want to|follow-?ups?\b|in a (?:future|later) (?:pr|commit)"
     r"|left for later|further (?:work|investigation)",
     re.I,
@@ -478,10 +478,55 @@ VAGUE = re.compile(r"\bprobably\b|\bsome\b|\ba few\b|\badditional\b|\bother\b"
 TICKET = re.compile(r"#\d+|[A-Z]{2,}-\d+")
 
 
+TRAILING_HEADER = re.compile(
+    r"^\s*(?:#{1,4}\s*)?\**\s*(worth noting|notes?|additional notes?|other notes?"
+    r"|follow[- ]?ups?|remaining|next steps?|open (?:items|questions)|to do)\b",
+    re.I,
+)
+UNDECIDED = re.compile(
+    r"needs? to be decided|needs? a decision|still (?:to be|needs?|open)"
+    r"|\bTBD\b|to be determined|open question|should we\b|do we\b"
+    r"|we (?:should|could) (?:probably|also|maybe)|might want to"
+    r"|unclear (?:if|whether|how)|not sure (?:if|whether)|up for discussion"
+    r"|worth (?:discussing|considering)|\bTODO\b|(?:one|two|a few|a couple) more",
+    re.I,
+)
+ITEM_START = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s")
+
+
+def trailing_items(lines):
+    """Items in a trailing section, each joined with its continuation lines."""
+    items = []
+    for line in lines:
+        if ITEM_START.match(line):
+            items.append(line)
+        elif items and line.strip():
+            items[-1] += " " + line.strip()
+    return items
+
+
 def check_trailing_scope(body):
-    """A vague deferral at the end is work that belonged in the discussion."""
-    lines = [line for line in plain(body).strip().split("\n") if line.strip()]
-    tail = "\n".join(lines[-4:])
+    """An undecided item at the end is work that belonged in the discussion.
+
+    Matching the section header alone would fire on every notes list, so only an
+    item carrying no decision and no ticket is reported."""
+    lines = plain(body).strip().split("\n")
+    start = None
+    for index, line in enumerate(lines):
+        if TRAILING_HEADER.match(line):
+            start = index
+    if start is not None:
+        for item in trailing_items(lines[start:]):
+            if UNDECIDED.search(item) and not TICKET.search(item):
+                return [("trailing-scope",
+                         'a trailing item is still undecided: "%s". That section carries '
+                         "settled consequences of the change. An open decision belonged in "
+                         "the discussion before this was written. Decide it, give it a "
+                         "ticket, or cut it." % item.strip()[:70])]
+        return []
+
+    body_lines = [line for line in lines if line.strip()]
+    tail = "\n".join(body_lines[-4:])
     if not DEFERRAL.search(tail):
         return []
     if TICKET.search(tail) or not VAGUE.search(tail):
