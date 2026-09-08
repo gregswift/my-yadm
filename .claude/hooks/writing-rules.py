@@ -212,12 +212,26 @@ def plain(body):
     return URL.sub("URL", CODE_SPAN.sub("CODE", text))
 
 
-def check_dashes(body):
-    hits = [c for c in body if c in "—–"]
-    if hits:
-        return [("em-dash", "%d em or en dash. Use a comma, a colon, or a "
-                 "second sentence." % len(hits))]
-    return []
+DASH_NAMES = {"—": "em dash", "–": "en dash"}
+
+
+def check_dashes(body, offset=0):
+    """Locate the dash. A bare count sends the reader hunting, and the character
+    they wrongly suspect is the ASCII hyphen opening a list item."""
+    hits = []
+    for number, line in enumerate(body.split("\n"), start=1 + offset):
+        for column, char in enumerate(line):
+            if char in DASH_NAMES:
+                hits.append((number, DASH_NAMES[char],
+                             line[max(0, column - 30):column + 30].strip()))
+    if not hits:
+        return []
+    number, name, snippet = hits[0]
+    return [("em-dash",
+             "%d en or em dash. The first is an %s on line %d: \"%s\". An ASCII "
+             "hyphen is never matched, so a list item opening with \"-\" is not "
+             "this finding. Replace the dash with a comma, a colon, or a second "
+             "sentence." % (len(hits), name, number, snippet))]
 
 
 def check_wrapping(body):
@@ -605,9 +619,9 @@ def check_out_of_scope(body):
     return []
 
 
-def check_body_line_length(body):
+def check_body_line_length(body, offset=0):
     """commitlint's body-max-line-length. Commit bodies wrap at 100."""
-    for number, line in enumerate(body.split("\n"), start=1):
+    for number, line in enumerate(body.split("\n"), start=1 + offset):
         if len(line) > MAX_BODY_LINE:
             return [("body-line-length",
                      "line %d is %d characters. Wrap commit bodies at %d, "
@@ -623,8 +637,12 @@ def check_length(body):
 
 
 def collect(kind, body, text, cwd, program="git"):
-    findings = (check_dashes(body) + check_sentences(body) + check_banned(body)
-                + check_ellipsis(body) + check_verbed_noun(body))
+    # A commit subject is stripped before the checks run, so a line number taken
+    # from the body is one short of the line the writer sees.
+    offset = 1 if kind == "commit" else 0
+    findings = (check_dashes(body, offset) + check_sentences(body)
+                + check_banned(body) + check_ellipsis(body)
+                + check_verbed_noun(body))
     diff = staged_diff(cwd, program)
     findings += check_coined_term(cwd, body, diff, program)
     if kind == "pr":
@@ -632,7 +650,7 @@ def collect(kind, body, text, cwd, program="git"):
         findings += (check_wrapping(body) + check_length(text)
                      + check_trailing_scope(body) + check_out_of_scope(body))
     else:
-        findings += (check_body_line_length(body) + check_tier_duplication(diff, body)
+        findings += (check_body_line_length(body, offset) + check_tier_duplication(diff, body)
                      + check_comment_rationale(diff) + check_comment_length(diff)
                      + check_trailing_scope(body))
     return findings
