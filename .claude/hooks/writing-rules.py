@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""PreToolUse gate for commit messages and pull request bodies.
+"""PreToolUse gate for commit messages, GitHub bodies and GitHub comments.
 
 Reads a Claude Code hook payload on stdin. When the Bash command writes a
-commit message or a pull request body, the text is checked against the writing
-rules in ~/.claude/skills/writing-standard/. Blocking findings exit 2 and
+commit message, a pull request or issue body, or a pull request or issue
+comment, the text is checked against the writing rules in
+~/.claude/skills/writing-standard/. Blocking findings exit 2 and
 return the findings to Claude. Warning findings exit 0 and print to stderr.
 Any internal error exits 0, because a broken linter must not stop work.
 
@@ -20,17 +21,18 @@ import sys
 
 MAX_WORDS = 20
 BLOCK_WORDS = 30
-MAX_PR_LINES = 20
+MAX_BODY_LINES = 40
+MAX_COMMENT_LINES = 30
 MAX_BODY_LINE = 100
-MAX_COMMENT_SENTENCES = 3
+MAX_CODE_COMMENT_SENTENCES = 3
 LOG_FILE = os.path.expanduser("~/.claude/hooks/writing-rules.log")
 OVERRIDE_FILE = os.path.expanduser("~/.claude/hooks/writing-rules.override")
 
 # Rules not listed here block. A warning prints and exits 0, so a heuristic
 # check can be observed for a week before it is allowed to stop a commit.
 WARN_ONLY = frozenset({
-    "comment-rationale",
-    "comment-length",
+    "code-comment-rationale",
+    "code-comment-length",
     "coined-term",
     "verbed-noun",
     "trailing-scope",
@@ -43,11 +45,12 @@ RULES = """Writing rules (~/.claude/skills/writing-standard/):
 - One idea per sentence, 20 words or fewer.
 - No em dashes. Use a comma, a colon, or a second sentence.
 - Wrap commit bodies at 100 characters (commitlint body-max-line-length).
-- A PR body is not a commit: never wrapped, one line per paragraph.
-- A PR body is under 20 lines.
+- A GitHub body is not a commit: never wrapped, one line per paragraph.
+- A pull request or issue body is under 40 non-blank lines. A comment is under
+  30, and its fenced code does not count.
 - One rationale per tier. Code says what, comments say why, the commit carries
   rationale, docs hold paragraphs. Do not repeat one explanation across tiers.
-- A comment is 3 sentences at most. Longer belongs in a doc with a pointer.
+- A code comment is 3 sentences at most. Longer belongs in a doc with a pointer.
 - Never coin a name. A real name appears in the diff, not only in the prose.
 - No idioms, no figures of speech, no meta-narration about your own writing.
 - Never close on work that should have been settled before writing."""
@@ -67,7 +70,30 @@ SENTENCE_SPLIT = re.compile(r"(?<=[.!?])\s+(?=[A-Z`\"'(])")
 GIT_VALUE_OPTS = {"-c", "-C", "--exec-path", "--git-dir", "--work-tree",
                   "--namespace", "--config-env", "--super-prefix"}
 SEPARATORS = {"&&", "||", ";", "|", "(", ")"}
-PR_WRITES = [[a, b] for a in ("pr", "issue") for b in ("create", "edit", "comment")]
+# A comment is the discussion, a body is its outcome, and an issue has no diff
+# standing behind it. The three take different rule sets, so the noun and the
+# subcommand are both kept instead of collapsing into one GitHub kind.
+GH_NOUNS = ("pr", "issue")
+GH_WRITES = ("create", "edit", "comment")
+
+LABELS = {
+    "commit": "commit message",
+    "pr": "pull request body",
+    "issue": "issue body",
+    "comment": "comment",
+}
+LENGTH_RULE = {
+    "pr": "pr-body-length",
+    "issue": "issue-body-length",
+    "comment": "comment-body-length",
+}
+
+
+def github_kind(words):
+    """'pr', 'issue' or 'comment' for a gh invocation that writes prose."""
+    if words[:2] and words[0] in GH_NOUNS and words[1] in GH_WRITES:
+        return "comment" if words[1] == "comment" else words[0]
+    return None
 
 
 def positionals(tokens, program, limit=3):
@@ -134,7 +160,9 @@ VCS = ("git", "yadm")
 
 
 def extract(command, cwd):
-    """Return (kind, body, program). kind is 'commit', 'pr' or None."""
+    """Return (kind, body, program).
+
+    kind is 'commit', 'pr', 'issue', 'comment', 'unreadable' or None."""
     import shlex
 
     docs = heredocs(command)
@@ -146,8 +174,8 @@ def extract(command, cwd):
 
     program = next((p for p in VCS
                     if any(w[:1] == ["commit"] for w in positionals(tokens, p))), None)
-    is_pr = any(w[:2] in PR_WRITES for w in positionals(tokens, "gh"))
-    if not program and not is_pr:
+    gh_kind = next((k for k in map(github_kind, positionals(tokens, "gh")) if k), None)
+    if not program and not gh_kind:
         return None, None, None
 
     inline = flag_values(tokens, ["-m", "--message"] if program else ["-b", "--body"])
@@ -181,7 +209,7 @@ def extract(command, cwd):
         return "unreadable", named[0], program or "git"
     if not text:
         return None, None, None
-    return ("commit" if program else "pr"), text, program or "git"
+    return ("commit" if program else gh_kind), text, program or "git"
 
 
 def body_of(kind, text):
@@ -389,7 +417,7 @@ RATIONALE = re.compile(
 )
 
 
-def check_comment_rationale(diff):
+def check_code_comment_rationale(diff):
     """Before-and-after contrast in a comment is commit-body content."""
     for run in comment_runs(diff):
         text = " ".join(run)
@@ -397,24 +425,24 @@ def check_comment_rationale(diff):
             continue
         match = RATIONALE.search(text)
         if match:
-            return [("comment-rationale",
+            return [("code-comment-rationale",
                      'a comment this commit adds says "%s". A comment that contrasts '
                      "before and after is change rationale. Move it to the commit body."
                      % match.group(0))]
     return []
 
 
-def check_comment_length(diff):
+def check_code_comment_length(diff):
     for run in comment_runs(diff):
         text = " ".join(run).strip()
         if DOC_MARKER.search(text) or len(text) < 120:
             continue
         count = len([s for s in SENTENCE_SPLIT.split(text) if s.strip()])
-        if count > MAX_COMMENT_SENTENCES:
-            return [("comment-length",
+        if count > MAX_CODE_COMMENT_SENTENCES:
+            return [("code-comment-length",
                      'a comment this commit adds runs %d sentences: "%s ...". The ceiling '
                      "is %d. Move it to a doc and leave a one-line pointer."
-                     % (count, text[:60], MAX_COMMENT_SENTENCES))]
+                     % (count, text[:60], MAX_CODE_COMMENT_SENTENCES))]
     return []
 
 
@@ -629,11 +657,30 @@ def check_body_line_length(body, offset=0):
     return []
 
 
-def check_length(body):
-    count = len(body.strip().split("\n"))
-    if count > MAX_PR_LINES:
-        return [("pr-length", "PR body is %d lines. The limit is %d." % (count, MAX_PR_LINES))]
-    return []
+def outside_fences(lines):
+    """Lines that sit outside a fenced code block, the fences themselves dropped."""
+    fenced = False
+    for line in lines:
+        if FENCE.match(line):
+            fenced = not fenced
+            continue
+        if not fenced:
+            yield line
+
+
+def check_length(kind, body):
+    limit = MAX_COMMENT_LINES if kind == "comment" else MAX_BODY_LINES
+    lines = body.split("\n")
+    if kind == "comment":
+        lines = outside_fences(lines)
+    count = len([line for line in lines if line.strip()])
+    if count <= limit:
+        return []
+    exempt = "Blank lines do not count"
+    if kind == "comment":
+        exempt += ", and neither does fenced code"
+    return [(LENGTH_RULE[kind], "this %s is %d lines. The limit is %d. %s."
+             % (LABELS[kind], count, limit, exempt))]
 
 
 def collect(kind, body, text, cwd, program="git"):
@@ -644,15 +691,22 @@ def collect(kind, body, text, cwd, program="git"):
                 + check_banned(body) + check_ellipsis(body)
                 + check_verbed_noun(body))
     diff = staged_diff(cwd, program)
-    findings += check_coined_term(cwd, body, diff, program)
-    if kind == "pr":
-        # A pull request body is not a commit, so it is never wrapped.
-        findings += (check_wrapping(body) + check_length(text)
-                     + check_trailing_scope(body) + check_out_of_scope(body))
-    else:
-        findings += (check_body_line_length(body, offset) + check_tier_duplication(diff, body)
-                     + check_comment_rationale(diff) + check_comment_length(diff)
-                     + check_trailing_scope(body))
+    if kind == "commit":
+        return (findings + check_coined_term(cwd, body, diff, program)
+                + check_body_line_length(body, offset) + check_tier_duplication(diff, body)
+                + check_code_comment_rationale(diff) + check_code_comment_length(diff)
+                + check_trailing_scope(body))
+
+    # A GitHub body is not a commit, so it is never wrapped.
+    findings += check_wrapping(body) + check_length(kind, body)
+    # An issue proposes work that has no diff yet, so a name it introduces
+    # cannot appear in one.
+    if kind != "issue":
+        findings += check_coined_term(cwd, body, diff, program)
+    # A comment is the discussion. Raising an open question in one is its point,
+    # and Out of Scope is a section a body carries, not a comment.
+    if kind != "comment":
+        findings += check_trailing_scope(body) + check_out_of_scope(body)
     return findings
 
 
@@ -730,7 +784,7 @@ def main():
     blocking = [f for f in findings if f[0] not in WARN_ONLY]
     warnings = [f for f in findings if f[0] in WARN_ONLY]
 
-    label = "commit message" if kind == "commit" else "pull request body"
+    label = LABELS[kind]
     if warnings:
         sys.stderr.write("Writing warnings on this %s (not blocking):\n" % label)
         for rule, message in warnings:
