@@ -3,10 +3,10 @@
 
 Reads a Claude Code hook payload on stdin. When the Bash command writes a
 commit message, a pull request or issue body, or a pull request or issue
-comment, the text is checked against the writing rules in
-~/.claude/skills/writing-standard/. Blocking findings exit 2 and
-return the findings to Claude. Warning findings exit 0 and print to stderr.
-Any internal error exits 0, because a broken linter must not stop work.
+comment, the text is checked against the writing rules in ~/.claude/CLAUDE.md.
+Blocking findings exit 2 and return the findings to Claude. Warning findings
+exit 0 and print to stderr. Any internal error exits 0, because a broken linter
+must not stop work.
 
 WRITING_RULES_ALLOW is not honored. Setting it blocks the command and is
 recorded, because an agent can set an environment variable and a gate that any
@@ -41,7 +41,7 @@ WARN_ONLY = frozenset({
     "sentence-long",
 })
 
-RULES = """Writing rules (~/.claude/skills/writing-standard/):
+RULES = """Writing rules (~/.claude/CLAUDE.md):
 - One idea per sentence, 20 words or fewer.
 - No em dashes. Use a comma, a colon, or a second sentence.
 - Wrap commit bodies at 100 characters (commitlint body-max-line-length).
