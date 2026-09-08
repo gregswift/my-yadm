@@ -234,10 +234,37 @@ def check_wrapping(body):
     return []
 
 
+BLOCK_START = re.compile(r"^\s*(?:[-*+>|]|#{1,6}|\d+[.)])\s")
+
+
+def text_units(body):
+    """Paragraphs and list items, one unit each, markers stripped.
+
+    A list item carries no terminal punctuation, so a run of them reaching the
+    sentence splitter joins into a single sentence as long as the list."""
+    units = []
+    current = []
+    for line in plain(body).split("\n"):
+        if not line.strip():
+            if current:
+                units.append(" ".join(current))
+                current = []
+            continue
+        if BLOCK_START.match(line):
+            if current:
+                units.append(" ".join(current))
+            current = [BLOCK_START.sub("", line.strip(), count=1)]
+            continue
+        current.append(line.strip())
+    if current:
+        units.append(" ".join(current))
+    return units
+
+
 def check_sentences(body):
     findings = []
-    for chunk in plain(body).split("\n\n"):
-        for sentence in SENTENCE_SPLIT.split(chunk.strip()):
+    for unit in text_units(body):
+        for sentence in SENTENCE_SPLIT.split(unit):
             words = sentence.split()
             if len(words) > MAX_WORDS:
                 # Greg's own prose averages 19-21 words, so 20 is the target and
